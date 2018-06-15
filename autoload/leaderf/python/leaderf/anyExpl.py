@@ -341,6 +341,7 @@ class OptionalAction(argparse.Action):
 class AnyHub(object):
     def __init__(self):
         self._managers = {}
+        self._parser = None
 
     def _add_argument(self, parser, arg_list, positional_args):
         """
@@ -388,8 +389,122 @@ class AnyHub(object):
                     add_argument(*arg["name"], nargs=nargs, default=argparse.SUPPRESS,
                                  help=arg.get("help", ""))
 
+    def _default_action(self, category, arguments, *args, **kwargs):
+        if lfEval("has_key(g:Lf_Extensions, '%s')" % category) == '1':
+            if category not in self._managers:
+                # In python3, string in g:Lf_Extensions is converted to bytes by vim.bindeval(),
+                # so using vim.eval() instead.
+                # But Funcref object will be converted to None by vim.eval()
+                config = lfEval("g:Lf_Extensions['%s']" % category)
+                for k in config:
+                    if config[k] is None:
+                        config[k] = vim.bindeval("g:Lf_Extensions['%s']['%s']" % (category, k))
+
+                if "source" in config and isinstance(config["source"], dict) \
+                        and config["source"].get("command", "") is None:
+                    config["source"]["command"] = vim.bindeval("g:Lf_Extensions['%s']['source']['command']" % category)
+                self._managers[category] = AnyExplManager(category, config)
+
+            manager = self._managers[category]
+        else:
+            if category == "file":
+                from .fileExpl import fileExplManager
+                manager = fileExplManager
+            elif category == "buffer":
+                from .bufExpl import bufExplManager
+                manager = bufExplManager
+            elif category == "mru":
+                from .mruExpl import mruExplManager
+                manager = mruExplManager
+                kwargs["cb_name"] = vim.current.buffer.name
+            elif category == "tag":
+                from .tagExpl import tagExplManager
+                manager = tagExplManager
+            elif category == "bufTag":
+                from .bufTagExpl import bufTagExplManager
+                manager = bufTagExplManager
+            elif category == "function":
+                from .functionExpl import functionExplManager
+                manager = functionExplManager
+            elif category == "line":
+                from .lineExpl import lineExplManager
+                manager = lineExplManager
+            elif category == "cmdHistory":
+                from .historyExpl import historyExplManager
+                manager = historyExplManager
+                kwargs["history"] = "cmd"
+            elif category == "searchHistory":
+                from .historyExpl import historyExplManager
+                manager = historyExplManager
+                kwargs["history"] = "search"
+            elif category == "help":
+                from .helpExpl import helpExplManager
+                manager = helpExplManager
+            elif category == "colorscheme":
+                from .colorschemeExpl import colorschemeExplManager
+                manager = colorschemeExplManager
+            else:
+                raise Exception("Unrecognized argument %s!" % category)
+
+        positions = {"--top", "--bottom", "--left", "--right", "--belowright", "--aboveleft", "--fullScreen"}
+        win_pos = "--" + lfEval("g:Lf_WindowPosition")
+        for i in arguments:
+            if i in positions:
+                win_pos = i
+                break
+
+        if "--cword" in arguments:
+            kwargs["pattern"] = lfEval("expand('<cword>')")
+
+        kwargs["arguments"] = arguments
+        kwargs["positional_args"] = positional_args
+
+        manager.startExplorer(win_pos[2:], *args, **kwargs)
+
+
     def start(self, category, arg_line, *args, **kwargs):
-        parser = argparse.ArgumentParser(prog="Leaderf " + category)
+        if self._parser is None:
+            self._parser = argparse.ArgumentParser(prog="Leaderf")
+            subparsers = self._parser.add_subparsers(title="sub-command begin", description="hello world", help='sub-command help')
+            for category in lfEval("keys(g:Lf_Extensions)"):
+                positional_args = []
+                parser = subparsers.add_parser(category, help='help')
+
+                group = parser.add_argument_group('specific arguments')
+                arg_def = lfEval("get(g:Lf_Extensions['%s'], 'arguments', [])" % category)
+                self._add_argument(group, arg_def, positional_args)
+
+                group = parser.add_argument_group("common arguments")
+                self._add_argument(group, lfEval("g:Lf_CommonArguments"), positional_args)
+
+                kwargs["positional_args"] = positional_args
+
+                parser.set_defaults(start=self._default_action)
+
+        try:
+            # do not produce an error when extra arguments are present
+            arguments = vars(self._parser.parse_known_args(shlex.split(arg_line))[0])
+        except SystemExit:
+            return
+
+        positions = {"--top", "--bottom", "--left", "--right", "--belowright", "--aboveleft", "--fullScreen"}
+        win_pos = "--" + lfEval("g:Lf_WindowPosition")
+        for i in arguments:
+            if i in positions:
+                win_pos = i
+                break
+
+        if "--cword" in arguments:
+            kwargs["pattern"] = lfEval("expand('<cword>')")
+
+        kwargs["arguments"] = arguments
+
+        print(arguments)
+        # if category not in self._managers:
+        # manager.startExplorer(win_pos[2:], *args, **kwargs)
+        return
+
+
         positional_args = []
         if lfEval("has_key(g:Lf_Extensions, '%s')" % category) == '1':
             if category not in self._managers:
